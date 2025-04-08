@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:6.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 
 WORKDIR /app
 
@@ -10,7 +10,6 @@ COPY PluralKit.Bot/PluralKit.Bot.csproj /app/PluralKit.Bot/
 COPY PluralKit.Core/PluralKit.Core.csproj /app/PluralKit.Core/
 COPY PluralKit.Tests/PluralKit.Tests.csproj /app/PluralKit.Tests/
 COPY .git/ /app/.git
-COPY proto/ /app/proto
 RUN dotnet restore PluralKit.sln
 
 # Copy the rest of the code and build
@@ -18,7 +17,7 @@ COPY . /app
 RUN dotnet build -c Release -o bin
 
 # Build runtime stage (doesn't include SDK)
-FROM mcr.microsoft.com/dotnet/aspnet:6.0
+FROM mcr.microsoft.com/dotnet/aspnet:8.0
 LABEL org.opencontainers.image.source = "https://github.com/PluralKit/PluralKit"
 
 WORKDIR /app

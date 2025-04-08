@@ -80,7 +80,7 @@ public class ProxiedMessage
 
         try
         {
-            await _proxy.ExecuteReproxy(ctx.Message, msg, members, match);
+            await _proxy.ExecuteReproxy(ctx.Message, msg, members, match, ctx.DefaultPrefix);
 
             if (ctx.Guild == null)
                 await _rest.CreateReaction(ctx.Channel.Id, ctx.Message.Id, new Emoji { Name = Emojis.Success });
@@ -204,7 +204,7 @@ public class ProxiedMessage
         }
 
         // Append or prepend the new content to the original message content if needed.
-        // If no flag is supplied, the new contents will completly overwrite the old contents
+        // If no flag is supplied, the new contents will completely overwrite the old contents
         // If both flags are specified. the message will be prepended AND appended
         if (append && prepend)
             newContent = $"{newContent}{mutateSpace}{originalContent}{mutateSpace}{newContent}";
@@ -215,6 +215,12 @@ public class ProxiedMessage
 
         if (newContent.Length > 2000)
             throw new PKError("PluralKit cannot proxy messages over 2000 characters in length.");
+
+        // We count as an empty message even if there's an embed because the only embeds pk proxies are reply embeds and those aren't message content
+        if (newContent.Trim().Length == 0 && (originalMsg.Attachments.Length == 0 || clearAttachments))
+        {
+            throw new PKError("This action would result in an empty message. If you wish to delete the message, react to it with \u274C.");
+        }
 
         try
         {
@@ -234,6 +240,12 @@ public class ProxiedMessage
         catch (NotFoundException)
         {
             throw new PKError("Could not edit message.");
+        }
+        catch (BadRequestException e)
+        {
+            if (e.Message == "Voice messages cannot be edited")
+                throw new PKError($"{e.Message}.");
+            throw;
         }
     }
 
@@ -293,7 +305,7 @@ public class ProxiedMessage
                 throw new PKError(error);
         }
 
-        var lastMessage = _lastMessageCache.GetLastMessage(ctx.Message.ChannelId);
+        var lastMessage = await _lastMessageCache.GetLastMessage(ctx.Message.GuildId ?? 0, ctx.Message.ChannelId);
 
         var isLatestMessage = lastMessage?.Current.Id == ctx.Message.Id
             ? lastMessage?.Previous?.Id == msg.Mid

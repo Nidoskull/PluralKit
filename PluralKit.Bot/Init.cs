@@ -76,10 +76,19 @@ public class Init
             // Init the bot instance itself, register handlers and such to the client before beginning to connect
             bot.Init();
 
-            // Start the Discord shards themselves (handlers already set up)
-            logger.Information("Connecting to Discord");
-            await StartCluster(services);
+            // load runtime config from redis
+            await services.Resolve<RuntimeConfigService>().LoadConfig();
 
+            // Start HTTP server
+            if (config.HttpListenerAddr != null)
+                services.Resolve<HttpListenerService>().Start(config.HttpListenerAddr);
+
+            // Start the Discord shards themselves (handlers already set up)
+            if (!config.DisableGateway)
+            {
+                logger.Information("Connecting to Discord");
+                await StartCluster(services);
+            }
             logger.Information("Connected! All is good (probably).");
 
             // Lastly, we just... wait. Everything else is handled in the DiscordClient event loop
@@ -184,15 +193,7 @@ public class Init
             var shardMin = (int)Math.Round(totalShards * (float)nodeIndex / totalNodes);
             var shardMax = (int)Math.Round(totalShards * (float)(nodeIndex + 1) / totalNodes) - 1;
 
-            if (config.RedisGatewayUrl != null)
-            {
-                var shardService = services.Resolve<RedisGatewayService>();
-
-                for (var i = shardMin; i <= shardMax; i++)
-                    await shardService.Start(i);
-            }
-            else
-                await cluster.Start(info.Url, shardMin, shardMax, totalShards, info.SessionStartLimit.MaxConcurrency, redis.Connection);
+            await cluster.Start(info.Url, shardMin, shardMax, totalShards, info.SessionStartLimit.MaxConcurrency, redis.Connection);
         }
         else
         {

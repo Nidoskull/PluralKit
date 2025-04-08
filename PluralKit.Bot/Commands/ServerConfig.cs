@@ -26,8 +26,6 @@ public class ServerConfig
         await ctx.CheckGuildContext().CheckAuthorPermission(PermissionSet.ManageGuild, "Manage Server");
         var items = new List<PaginatedConfigItem>();
 
-        // TODO: move log channel / blacklist into here
-
         items.Add(new(
             "log cleanup",
             "Whether to clean up other bots' log channels",
@@ -50,13 +48,20 @@ public class ServerConfig
         ));
 
         items.Add(new(
+            "suppress notifications",
+            "Whether all proxied messages will have notifications suppressed (sent as `@silent` messages)",
+            EnabledDisabled(ctx.GuildConfig!.SuppressNotifications),
+            "disabled"
+        ));
+
+        items.Add(new(
             "log channel",
             "Channel to log proxied messages to",
             ctx.GuildConfig!.LogChannel != null ? $"<#{ctx.GuildConfig.LogChannel}>" : "none",
             "none"
         ));
 
-        string ChannelListMessage(int count, string cmd) => $"{count} channels, use `pk;scfg {cmd}` to view/update";
+        string ChannelListMessage(int count, string cmd) => $"{count} channels, use `{ctx.DefaultPrefix}scfg {cmd}` to view/update";
 
         items.Add(new(
             "log blacklist",
@@ -98,7 +103,7 @@ public class ServerConfig
                 eb.Description(description.ToString());
 
                 // using *large* blue diamond here since it's easier to see in the small footer
-                eb.Footer(new("\U0001f537 means this setting was changed. Type `pk;serverconfig <setting name> clear` to reset it to the default."));
+                eb.Footer(new($"\U0001f537 means this setting was changed. Type `{ctx.DefaultPrefix}serverconfig <setting name> clear` to reset it to the default."));
 
                 return Task.CompletedTask;
             }
@@ -181,7 +186,7 @@ public class ServerConfig
         await ctx.Reply(
             $"{Emojis.Success} Message logging for the given channels {(enable ? "enabled" : "disabled")}." +
             (logChannel == null
-                ? $"\n{Emojis.Warn} Please note that no logging channel is set, so there is nowhere to log messages to. You can set a logging channel using `pk;serverconfig log channel #your-log-channel`."
+                ? $"\n{Emojis.Warn} Please note that no logging channel is set, so there is nowhere to log messages to. You can set a logging channel using `{ctx.DefaultPrefix}serverconfig log channel #your-log-channel`."
                 : ""));
     }
 
@@ -353,7 +358,7 @@ public class ServerConfig
         await ctx.Reply(
             $"{Emojis.Success} Channels {(shouldAdd ? "added to" : "removed from")} the logging blacklist." +
             (guild.LogChannel == null
-                ? $"\n{Emojis.Warn} Please note that no logging channel is set, so there is nowhere to log messages to. You can set a logging channel using `pk;serverconfig log channel #your-log-channel`."
+                ? $"\n{Emojis.Warn} Please note that no logging channel is set, so there is nowhere to log messages to. You can set a logging channel using `{ctx.DefaultPrefix}serverconfig log channel #your-log-channel`."
                 : ""));
     }
 
@@ -378,10 +383,10 @@ public class ServerConfig
         {
             if (ctx.GuildConfig!.LogCleanupEnabled)
                 eb.Description(
-                    "Log cleanup is currently **on** for this server. To disable it, type `pk;serverconfig logclean off`.");
+                    $"Log cleanup is currently **on** for this server. To disable it, type `{ctx.DefaultPrefix}serverconfig logclean off`.");
             else
                 eb.Description(
-                    "Log cleanup is currently **off** for this server. To enable it, type `pk;serverconfig logclean on`.");
+                    $"Log cleanup is currently **off** for this server. To enable it, type `{ctx.DefaultPrefix}serverconfig logclean on`.");
             await ctx.Reply(embed: eb.Build());
             return;
         }
@@ -425,5 +430,21 @@ public class ServerConfig
         var newVal = ctx.MatchToggle(false);
         await ctx.Repository.UpdateGuild(ctx.Guild.Id, new() { RequireSystemTag = newVal });
         await ctx.Reply($"System tags are now **{(newVal ? "required" : "not required")}** for PluralKit users in this server.");
+    }
+
+    public async Task SuppressNotifications(Context ctx)
+    {
+        await ctx.CheckGuildContext().CheckAuthorPermission(PermissionSet.ManageGuild, "Manage Server");
+
+        if (!ctx.HasNext())
+        {
+            var msg = $"Suppressing notifications for proxied messages is currently **{EnabledDisabled(ctx.GuildConfig!.SuppressNotifications)}**.";
+            await ctx.Reply(msg);
+            return;
+        }
+
+        var newVal = ctx.MatchToggle(false);
+        await ctx.Repository.UpdateGuild(ctx.Guild.Id, new() { SuppressNotifications = newVal });
+        await ctx.Reply($"Suppressing notifications for proxied messages is now {EnabledDisabled(newVal)}.");
     }
 }

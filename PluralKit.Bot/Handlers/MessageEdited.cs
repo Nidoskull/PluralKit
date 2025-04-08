@@ -65,7 +65,7 @@ public class MessageEdited: IEventHandler<MessageUpdateEvent>
         var guild = await _cache.TryGetGuild(channel.GuildId!.Value);
         if (guild == null)
             throw new Exception("could not find self guild in MessageEdited event");
-        var lastMessage = _lastMessageCache.GetLastMessage(evt.ChannelId)?.Current;
+        var lastMessage = (await _lastMessageCache.GetLastMessage(evt.GuildId.HasValue ? evt.GuildId.Value ?? 0 : 0, evt.ChannelId))?.Current;
 
         // Only react to the last message in the channel
         if (lastMessage?.Id != evt.Id)
@@ -84,7 +84,7 @@ public class MessageEdited: IEventHandler<MessageUpdateEvent>
         try
         {
             await _proxy.HandleIncomingMessage(equivalentEvt, ctx, allowAutoproxy: false, guild: guild,
-                channel: channel, botPermissions: botPermissions);
+                channel: channel, botPermissions: botPermissions, prefix: (_config.Prefixes?[0] ?? BotConfig.DefaultPrefixes[0]));
         }
         // Catch any failed proxy checks so they get ignored in the global error handler
         catch (ProxyService.ProxyChecksFailedException) { }

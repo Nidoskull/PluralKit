@@ -2,12 +2,13 @@ name: Build dashboard Docker image
 
 on:
   push:
-    branches: [main]
     paths:
       - 'dashboard/**'
+      - '.github/workflows/dashboard.yml'
 
 jobs:
-  deploy:
+  build:
+    name: 'dashboard docker build'
     runs-on: ubuntu-latest
     permissions:
       packages: write

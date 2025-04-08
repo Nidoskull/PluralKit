@@ -25,7 +25,7 @@
     let valid = false;
 
     const get = async () => {
-        const pkdata = await api().private.meta.get();
+        const pkdata = await api().private.discord.shard_state.get();
         let data = pkdata.shards.sort((x, y) => (x.id > y.id) ? 1 : -1);
         let latencies = 0;
         data = data.map(shard => {
@@ -36,7 +36,7 @@
             return shard;
         });
 
-        if (data[0].cluster_id === 0) {
+        if (data[0].cluster_id !== undefined) {
             let clusterData = {};
             data.forEach(shard => {
                 if (clusterData[shard.cluster_id] === undefined) clusterData[shard.cluster_id] = [];
@@ -44,6 +44,8 @@
             });
             clusters = clusterData;
         }
+
+        Object.keys(clusters).map(c => clusters[c] = clusters[c].reverse());
 
         shards = data;
         pingAverage = Math.trunc(latencies / shards.length).toString();
@@ -141,7 +143,7 @@
                                         {shardInfoMsg}
                                     {/if}
                                     {#if foundShard}
-                                        Your shard is: Shard { foundShard.id }
+                                        Your shard is: Shard { foundShard.shard_id }
                                     {/if}
                                 </CardTitle>
                             </CardHeader>

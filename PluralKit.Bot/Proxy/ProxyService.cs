@@ -57,11 +57,11 @@ public class ProxyService
     }
 
     public async Task<bool> HandleIncomingMessage(MessageCreateEvent message, MessageContext ctx,
-                                Guild guild, Channel channel, bool allowAutoproxy, PermissionSet botPermissions)
+                                Guild guild, Channel channel, bool allowAutoproxy, PermissionSet botPermissions, string prefix)
     {
         var rootChannel = await _cache.GetRootChannel(message.GuildId!.Value, message.ChannelId);
 
-        if (!ShouldProxy(channel, rootChannel, message, ctx))
+        if (!ShouldProxy(channel, rootChannel, message, ctx, prefix))
             return false;
 
         var autoproxySettings = await _repo.GetAutoproxySettings(ctx.SystemId.Value, guild.Id, null);
@@ -81,10 +81,10 @@ public class ProxyService
         using (_metrics.Measure.Timer.Time(BotMetrics.ProxyMembersQueryTime))
             members = (await _repo.GetProxyMembers(message.Author.Id, message.GuildId!.Value)).ToList();
 
-        if (!_matcher.TryMatch(ctx, autoproxySettings, members, out var match, message.Content, message.Attachments.Length > 0,
+        if (!_matcher.TryMatch(ctx, autoproxySettings, members, out var match, message.Content, prefix, message.Attachments.Length > 0,
                 allowAutoproxy, ctx.CaseSensitiveProxyTags)) return false;
 
-        var canProxy = await CanProxy(channel, rootChannel, message, ctx);
+        var canProxy = await CanProxy(channel, rootChannel, message, ctx, prefix);
         if (canProxy != null)
         {
             if (ctx.ProxyErrorMessageEnabled)
@@ -112,7 +112,7 @@ public class ProxyService
     }
 
     // Proxy checks that give user errors
-    public async Task<string> CanProxy(Channel channel, Channel rootChannel, Message msg, MessageContext ctx)
+    public async Task<string> CanProxy(Channel channel, Channel rootChannel, Message msg, MessageContext ctx, string prefix)
     {
         if (!DiscordUtils.IsValidGuildChannel(channel))
             return $"PluralKit cannot proxy messages in this type of channel.";
@@ -128,13 +128,13 @@ public class ProxyService
             if (!ctx.TagEnabled)
             {
                 return "This server requires PluralKit users to have a system tag, but your system tag is disabled in this server. " +
-                    "Use `pk;s servertag -enable` to enable it for this server.";
+                    $"Use `{prefix}s servertag -enable` to enable it for this server.";
             }
 
             if (!ctx.HasProxyableTag())
             {
                 return "This server requires PluralKit users to have a system tag, but you do not have one set. " +
-                    "A system tag can be set for all servers with `pk;s tag`, or for just this server with `pk;s servertag`.";
+                    $"A system tag can be set for all servers with `{prefix}s tag`, or for just this server with `{prefix}s servertag`.";
             }
         }
 
@@ -154,11 +154,11 @@ public class ProxyService
     }
 
     // Proxy checks that don't give user errors unless `pk;debug proxy` is used
-    public bool ShouldProxy(Channel channel, Channel rootChannel, Message msg, MessageContext ctx)
+    public bool ShouldProxy(Channel channel, Channel rootChannel, Message msg, MessageContext ctx, string prefix)
     {
         // Make sure author has a system
         if (ctx.SystemId == null)
-            throw new ProxyChecksFailedException(Errors.NoSystemError.Message);
+            throw new ProxyChecksFailedException(Errors.NoSystemError(prefix).Message);
 
         // Make sure channel is a guild text channel and this is a normal message
         if (!DiscordUtils.IsValidGuildChannel(channel))
@@ -182,7 +182,7 @@ public class ProxyService
         // Make sure the system has proxying enabled in the server
         if (!ctx.ProxyEnabled)
             throw new ProxyChecksFailedException(
-                "Your system has proxying disabled in this server. Type `pk;proxy on` to enable it.");
+                $"Your system has proxying disabled in this server. Type `{prefix}proxy on` to enable it.");
 
         // Make sure we have an attachment, message content, or poll
         var isMessageBlank = msg.Content == null || msg.Content.Trim().Length == 0;
@@ -232,28 +232,42 @@ public class ProxyService
         var senderPermissions = PermissionExtensions.PermissionsFor(guild, messageChannel, trigger.Author.Id, guildMember);
         var tts = match.Member.Tts && senderPermissions.HasFlag(PermissionSet.SendTtsMessages);
 
-        var proxyMessage = await _webhookExecutor.ExecuteWebhook(new ProxyRequest
+        Message.MessageFlags flags = 0;
+        if (ctx.SuppressNotifications)
+            flags |= Message.MessageFlags.SuppressNotifications;
+        if (trigger.Flags.HasFlag(Message.MessageFlags.VoiceMessage))
+            flags |= Message.MessageFlags.VoiceMessage;
+
+        try
         {
-            GuildId = trigger.GuildId!.Value,
-            ChannelId = rootChannel.Id,
-            ThreadId = threadId,
-            MessageId = trigger.Id,
-            Name = await FixSameName(messageChannel.Id, ctx, match.Member),
-            AvatarUrl = AvatarUtils.TryRewriteCdnUrl(match.Member.ProxyAvatar(ctx)),
-            Content = content,
-            Attachments = trigger.Attachments,
-            FileSizeLimit = guild.FileSizeLimit(),
-            Embeds = embeds.ToArray(),
-            Stickers = trigger.StickerItems,
-            AllowEveryone = allowEveryone,
-            Flags = trigger.Flags.HasFlag(Message.MessageFlags.VoiceMessage) ? Message.MessageFlags.VoiceMessage : null,
-            Tts = tts,
-            Poll = trigger.Poll,
-        });
-        await HandleProxyExecutedActions(ctx, autoproxySettings, trigger, proxyMessage, match);
+            var proxyMessage = await _webhookExecutor.ExecuteWebhook(new ProxyRequest
+            {
+                GuildId = trigger.GuildId!.Value,
+                ChannelId = rootChannel.Id,
+                ThreadId = threadId,
+                MessageId = trigger.Id,
+                Name = await FixSameName(trigger.GuildId!.Value, messageChannel.Id, ctx, match.Member),
+                AvatarUrl = AvatarUtils.TryRewriteCdnUrl(match.Member.ProxyAvatar(ctx)),
+                Content = content,
+                Attachments = trigger.Attachments,
+                FileSizeLimit = guild.FileSizeLimit(),
+                Embeds = embeds.ToArray(),
+                Stickers = trigger.StickerItems,
+                AllowEveryone = allowEveryone,
+                Flags = flags,
+                Tts = tts,
+                Poll = trigger.Poll,
+            });
+            await HandleProxyExecutedActions(ctx, autoproxySettings, trigger, proxyMessage, match);
+        }
+        catch (PKError)
+        {
+            if (ctx.ProxyErrorMessageEnabled)
+                throw;
+        }
     }
 
-    public async Task ExecuteReproxy(Message trigger, PKMessage msg, List<ProxyMember> members, ProxyMember member)
+    public async Task ExecuteReproxy(Message trigger, PKMessage msg, List<ProxyMember> members, ProxyMember member, string prefix)
     {
         var originalMsg = await _rest.GetMessageOrNull(msg.Channel, msg.Mid);
         if (originalMsg == null)
@@ -273,7 +287,7 @@ public class ProxyService
 
         var autoproxySettings = await _repo.GetAutoproxySettings(ctx.SystemId.Value, msg.Guild!.Value, null);
         var config = await _repo.GetSystemConfig(ctx.SystemId.Value);
-        var prevMatched = _matcher.TryMatch(ctx, autoproxySettings, members, out var prevMatch, originalMsg.Content,
+        var prevMatched = _matcher.TryMatch(ctx, autoproxySettings, members, out var prevMatch, originalMsg.Content, prefix,
                                             originalMsg.Attachments.Length > 0, false, ctx.CaseSensitiveProxyTags);
 
         var match = new ProxyMatch
@@ -385,6 +399,10 @@ public class ProxyService
         if (hasContent)
         {
             var msg = repliedTo.Content;
+
+            // strip out overly excessive line breaks
+            msg = Regex.Replace(msg, @"(?:(?:([_\*]) \1)?\n){2,}", "\n");
+
             if (msg.Length > 100)
             {
                 msg = repliedTo.Content.Substring(0, 100);
@@ -440,11 +458,11 @@ public class ProxyService
         };
     }
 
-    private async Task<string> FixSameName(ulong channelId, MessageContext ctx, ProxyMember member)
+    private async Task<string> FixSameName(ulong guildId, ulong channelId, MessageContext ctx, ProxyMember member)
     {
         var proxyName = member.ProxyName(ctx);
 
-        var lastMessage = _lastMessage.GetLastMessage(channelId)?.Previous;
+        var lastMessage = (await _lastMessage.GetLastMessage(guildId, channelId))?.Previous;
         if (lastMessage == null)
             // cache is out of date or channel is empty.
             return proxyName;

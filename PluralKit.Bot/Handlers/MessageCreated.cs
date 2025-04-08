@@ -55,7 +55,9 @@ public class MessageCreated: IEventHandler<MessageCreateEvent>
     public (ulong?, ulong?) ErrorChannelFor(MessageCreateEvent evt, ulong userId) => (evt.GuildId, evt.ChannelId);
     private bool IsDuplicateMessage(Message msg) =>
         // We consider a message duplicate if it has the same ID as the previous message that hit the gateway
-        _lastMessageCache.GetLastMessage(msg.ChannelId)?.Current.Id == msg.Id;
+        // use only the local cache here
+        // http gateway sets last message before forwarding the message here, so this will always return true
+        _lastMessageCache._GetLastMessage(msg.ChannelId)?.Current.Id == msg.Id;
 
     public async Task Handle(int shardId, MessageCreateEvent evt)
     {
@@ -86,12 +88,19 @@ public class MessageCreated: IEventHandler<MessageCreateEvent>
         }
 
         // Try each handler until we find one that succeeds
+        // only show exceptions to users if the checks above succeed
+        try
+        {
+            if (await TryHandleCommand(shardId, evt, guild, channel))
+                return;
 
-        if (await TryHandleCommand(shardId, evt, guild, channel))
-            return;
-
-        if (evt.GuildId != null)
-            await TryHandleProxy(evt, guild, channel, rootChannel.Id, botPermissions);
+            if (evt.GuildId != null)
+                await TryHandleProxy(evt, guild, channel, rootChannel.Id, botPermissions);
+        }
+        catch (Exception exc)
+        {
+            await _bot.HandleError(this, evt, _services, exc, true);
+        }
     }
 
     private async Task TryHandleLogClean(Channel channel, MessageCreateEvent evt)
@@ -131,7 +140,7 @@ public class MessageCreated: IEventHandler<MessageCreateEvent>
             var config = system != null ? await _repo.GetSystemConfig(system.Id) : null;
             var guildConfig = guild != null ? await _repo.GetGuild(guild.Id) : null;
 
-            await _tree.ExecuteCommand(new Context(_services, shardId, guild, channel, evt, cmdStart, system, config, guildConfig));
+            await _tree.ExecuteCommand(new Context(_services, shardId, guild, channel, evt, cmdStart, system, config, guildConfig, _config.Prefixes ?? BotConfig.DefaultPrefixes));
         }
         catch (PKError)
         {
@@ -174,7 +183,7 @@ public class MessageCreated: IEventHandler<MessageCreateEvent>
 
         try
         {
-            return await _proxy.HandleIncomingMessage(evt, ctx, guild, channel, true, botPermissions);
+            return await _proxy.HandleIncomingMessage(evt, ctx, guild, channel, true, botPermissions, (_config.Prefixes?[0] ?? BotConfig.DefaultPrefixes[0]));
         }
 
         // Catch any failed proxy checks so they get ignored in the global error handler

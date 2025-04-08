@@ -32,13 +32,14 @@ public class Bot
     private readonly DiscordApiClient _rest;
     private readonly RedisService _redis;
     private readonly ILifetimeScope _services;
+    private readonly RuntimeConfigService _runtimeConfig;
 
     private Timer _periodicTask; // Never read, just kept here for GC reasons
 
     public Bot(ILifetimeScope services, ILogger logger, PeriodicStatCollector collector, IMetrics metrics,
                BotConfig config, RedisService redis,
                ErrorMessageService errorMessageService, CommandMessageService commandMessageService,
-               Cluster cluster, DiscordApiClient rest, IDiscordCache cache)
+               Cluster cluster, DiscordApiClient rest, IDiscordCache cache, RuntimeConfigService runtimeConfig)
     {
         _logger = logger.ForContext<Bot>();
         _services = services;
@@ -51,6 +52,7 @@ public class Bot
         _rest = rest;
         _redis = redis;
         _cache = cache;
+        _runtimeConfig = runtimeConfig;
     }
 
     private string BotStatus => $"{(_config.Prefixes ?? BotConfig.DefaultPrefixes)[0]}help"
@@ -73,8 +75,6 @@ public class Bot
                 }
             }
         };
-
-        _services.Resolve<RedisGatewayService>().OnEventReceived += (e) => OnEventReceived(e.Item1, e.Item2);
 
         // Init the shard stuff
         _services.Resolve<ShardInfoService>().Init();
@@ -99,13 +99,15 @@ public class Bot
 
     private async Task OnEventReceived(int shardId, IGatewayEvent evt)
     {
+        if (_runtimeConfig.Exists("disable_events")) return;
+
         // we HandleGatewayEvent **before** getting the own user, because the own user is set in HandleGatewayEvent for ReadyEvent
         await _cache.HandleGatewayEvent(evt);
         await _cache.TryUpdateSelfMember(_config.ClientId, evt);
         await OnEventReceivedInner(shardId, evt);
     }
 
-    private async Task OnEventReceivedInner(int shardId, IGatewayEvent evt)
+    public async Task OnEventReceivedInner(int shardId, IGatewayEvent evt)
     {
         // HandleEvent takes a type parameter, automatically inferred by the event type
         // It will then look up an IEventHandler<TypeOfEvent> in the DI container and call that object's handler method
@@ -181,7 +183,7 @@ public class Bot
             catch (Exception exc)
             {
 
-                await HandleError(handler, evt, serviceScope, exc);
+                await HandleError(handler, evt, serviceScope, exc, false);
             }
             _logger.Verbose("Received gateway event: {@Event}", evt);
 
@@ -204,16 +206,23 @@ public class Bot
             }
             catch (Exception exc)
             {
-                await HandleError(handler, evt, serviceScope, exc);
+                await HandleError(handler, evt, serviceScope, exc, false);
             }
         }
     }
 
-    private async Task HandleError<T>(IEventHandler<T> handler, T evt, ILifetimeScope serviceScope,
-                                      Exception exc)
+    public async Task HandleError<T>(IEventHandler<T> handler, T evt, ILifetimeScope serviceScope,
+                                      Exception exc, bool preChecksDone)
         where T : IGatewayEvent
     {
         _metrics.Measure.Meter.Mark(BotMetrics.BotErrors, exc.GetType().FullName);
+
+        if (exc is Myriad.Extensions.NotFoundInCacheException ce)
+        {
+            var scope = serviceScope.Resolve<Scope>();
+            scope.SetTag("entity.id", ce.EntityId.ToString());
+            scope.SetTag("entity.type", ce.EntityType);
+        }
 
         // Make this beforehand so we can access the event ID for logging
         var sentryEvent = new SentryEvent(exc);
@@ -247,6 +256,10 @@ public class Bot
             if (_config.DisableErrorReporting)
                 return;
 
+            // don't show errors for "failed to lookup channel" and such
+            // interaction handler doesn't have pre-checks, so just always try to show
+            if (!(preChecksDone && !(evt is InteractionCreateEvent _))) return;
+
             if (!exc.ShowToUser()) return;
 
             // Once we've sent it to Sentry, report it to the user (if we have permission to)
@@ -269,7 +282,7 @@ public class Bot
         _logger.Debug("Running once-per-minute scheduled tasks");
 
         // Check from a new custom status from Redis and update Discord accordingly
-        if (_redis.Connection != null && _config.RedisGatewayUrl == null)
+        if (true)
         {
             var newStatus = await _redis.Connection.GetDatabase().StringGetAsync("pluralkit:botstatus");
             if (newStatus != CustomStatusMessage)

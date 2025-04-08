@@ -3,17 +3,16 @@
 
 # Include project code and build files
 !PluralKit.*/
-!services/
-!lib/
 !Myriad/
 !.git
-!proto
 !dashboard
+!crates/
 
 !Cargo.toml
 !Cargo.lock
 !PluralKit.sln
 !nuget.config
+!ci/dotnet-version.sh
 
 # used for target binary builds
 !.docker-bin/
